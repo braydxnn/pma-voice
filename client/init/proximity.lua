@@ -2,7 +2,8 @@
 local disableUpdates = false
 local isListenerEnabled = false
 
-local currentVoiceTargets = {}
+-- contains the players current voice channel
+local voiceTargetChannels = {}
 
 function addNearbyPlayers()
 	if disableUpdates then return end
@@ -17,20 +18,24 @@ function addNearbyPlayers()
 		if serverId == playerServerId then goto skip_loop end
 
 		local ped = GetPlayerPed(ply)
-		local isTarget = currentVoiceTargets[serverId]
+		local targetChannel = voiceTargetChannels[serverId]
 		local voiceChannel = MumbleGetVoiceChannelFromServerId(serverId)
-		if #(coords - GetEntityCoords(ped)) < distance and voiceChannel == serverId then
-			if isTarget then goto skip_loop end
-			logger.info('Added %s as a voice target', serverId)
-			MumbleAddVoiceTargetChannel(voiceTarget, serverId)
-			currentVoiceTargets[serverId] = true
-		elseif isTarget then
-			if voiceChannel ~= serverId then
-				logger.warn("%s isn't set the right voice channel, got %s expected %s, removing them as target", serverId, voiceChannel, serverId)
+		if #(coords - GetEntityCoords(ped)) < distance then
+			if targetChannel then
+				if targetChannel ~= voiceChannel then
+					MumbleRemoveVoiceTargetChannel(voiceTarget, targetChannel)
+					goto wrong_channel
+				end
+				goto skip_loop
 			end
+			::wrong_channel::
+			logger.info('Added %s as a voice target', serverId)
+			MumbleAddVoiceTargetChannel(voiceTarget, voiceChannel)
+			voiceTargetChannels[serverId] = voiceChannel
+		elseif isTarget then
 			logger.info('Removed %s from voice targets', serverId)
-			MumbleRemoveVoiceTargetChannel(voiceTarget, serverId)
-			currentVoiceTargets[serverId] = nil
+			MumbleRemoveVoiceTargetChannel(voiceTarget, voiceTargetChannels[serverId])
+			voiceTargetChannels[serverId] = nil
 		end
 
 		::skip_loop::
@@ -64,19 +69,21 @@ end
 
 RegisterNetEvent('onPlayerJoining', function(serverId)
 	if isListenerEnabled then
-		MumbleAddVoiceChannelListen(serverId)
+		local tgtChannel = MumbleGetVoiceChannelFromServerId(serverId)
+		MumbleAddVoiceChannelListen(tgtChannel)
 		logger.verbose("Adding %s to listen table", serverId)
 	end
 end)
 
 RegisterNetEvent('onPlayerDropped', function(serverId)
 	if isListenerEnabled then
-		MumbleRemoveVoiceChannelListen(serverId)
+		local tgtChannel = MumbleGetVoiceChannelFromServerId(serverId)
+		MumbleRemoveVoiceChannelListen(tgtChannel)
 		logger.verbose("Removing %s from listen table", serverId)
 	end
-	if currentVoiceTargets[serverId] then
-		currentVoiceTargets[serverId] = nil
-		MumbleRemoveVoiceChannelListen(serverId)
+	if voiceTargetChannels[serverId] then
+		MumbleRemoveVoiceTargetChannel(voiceTarget, voiceTargetChannels[serverId])
+		voiceTargetChannels[serverId] = nil
 	end
 end)
 
@@ -92,10 +99,6 @@ Citizen.CreateThread(function()
 		-- wait for mumble to reconnect
 		while not MumbleIsConnected() do
 			Wait(100)
-		end
-		if MumbleGetVoiceChannelFromServerId(playerServerId) ~= playerServerId then
-			logger.warn("Not set to the proper voice channel, resetting.")
-			handleMumbleConnection()
 		end
 		if GetConvarInt('voice_enableUi', 1) == 1 then
 			if lastRadioStatus ~= radioPressed or lastTalkingStatus ~= (NetworkIsPlayerTalking(PlayerId()) == 1) then
